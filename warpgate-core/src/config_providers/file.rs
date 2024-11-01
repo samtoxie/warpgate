@@ -140,6 +140,7 @@ impl ConfigProvider for FileConfigProvider {
     async fn username_for_sso_credential(
         &mut self,
         client_credential: &AuthCredential,
+        _: Option<String>,
     ) -> Result<Option<String>, WarpgateError> {
         let AuthCredential::Sso {
             provider: client_provider,

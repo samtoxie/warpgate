@@ -9,6 +9,7 @@ use sea_orm::{
 };
 use tokio::sync::Mutex;
 use tracing::*;
+use uuid::Uuid;
 use warpgate_common::auth::{
     AllCredentialsPolicy, AnySingleCredentialPolicy, AuthCredential, CredentialKind,
     CredentialPolicy, PerProtocolCredentialPolicy,
@@ -18,7 +19,7 @@ use warpgate_common::helpers::otp::verify_totp;
 use warpgate_common::{
     Role as RoleConfig, Target as TargetConfig, User as UserConfig, UserAuthCredential,
     UserPasswordCredential, UserPublicKeyCredential, UserSsoCredential, UserTotpCredential,
-    WarpgateError,
+    WarpgateError, UserRequireCredentialsPolicy,
 };
 use warpgate_db_entities::{Role, Target, User, UserRoleAssignment};
 
@@ -146,6 +147,7 @@ impl ConfigProvider for DatabaseConfigProvider {
     async fn username_for_sso_credential(
         &mut self,
         client_credential: &AuthCredential,
+        preferred_username: Option<String>,
     ) -> Result<Option<String>, WarpgateError> {
         let AuthCredential::Sso {
             provider: client_provider,
@@ -155,9 +157,11 @@ impl ConfigProvider for DatabaseConfigProvider {
             return Ok(None);
         };
 
-        Ok(self
+        let users = self
             .list_users()
-            .await?
+            .await?;
+
+        let user = users
             .iter()
             .find(|x| {
                 for cred in x.credentials.iter() {
@@ -170,8 +174,40 @@ impl ConfigProvider for DatabaseConfigProvider {
                     }
                 }
                 false
-            })
-            .map(|x| x.username.clone()))
+            });
+            
+
+        return match user {
+            Some(user) => Ok(Some(user.username.clone())),
+            None => {
+
+                let Some(preferred_username) = preferred_username else {
+                    error!("No preferred_username given, cannot create an account.");
+                    return Ok(None);
+                };
+
+                let db = self.db.lock().await;
+
+                let values = User::ActiveModel {
+                    id: Set(Uuid::new_v4()),
+                    username: sea_orm::Set(preferred_username.clone()),
+                    credentials: sea_orm::Set(serde_json::to_value(vec![UserAuthCredential::Sso(
+                        UserSsoCredential {
+                            email: client_email.clone(),
+                            provider: Some(client_provider.clone()),
+                        }
+                    )])?),
+                    credential_policy: sea_orm::Set(serde_json::to_value(
+                        None::<UserRequireCredentialsPolicy>,
+                    )?),
+                };
+                values.insert(&*db).await.map_err(WarpgateError::from)?;
+
+                Ok(Some(preferred_username))
+            },
+        };
+
+            
     }
 
     async fn validate_credential(

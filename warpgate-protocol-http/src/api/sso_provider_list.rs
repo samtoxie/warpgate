@@ -180,7 +180,7 @@ impl Api {
             ));
         };
 
-        let response = context
+        let response: warpgate_sso::SsoLoginResponse = context
             .request
             .verify_code((*code).clone())
             .await
@@ -206,11 +206,12 @@ impl Api {
             .config_provider
             .lock()
             .await
-            .username_for_sso_credential(&cred)
+            .username_for_sso_credential(&cred, response.preferred_username)
             .await?;
         let Some(username) = username else {
             return Ok(Err(format!("No user matching {email}")));
         };
+
 
         let mut auth_state_store = services.auth_state_store.lock().await;
         let state_arc =
